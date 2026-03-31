@@ -22,26 +22,71 @@ class JenkinsService {
    */
   async triggerBuild(params = {}) {
     try {
-      const fetch = require('node-fetch');
-      const url = `${this.baseUrl}/job/${this.jobName}/buildWithParameters`;
+      const http = require('http');
+      const url = new URL(`${this.baseUrl}/job/${this.jobName}/build`);
+      
+      const auth = Buffer.from(`${this.user}:${this.token}`).toString('base64');
+      
+      return new Promise((resolve, reject) => {
+        // First get CSRF crumb
+        const crumbReq = http.request(`${this.baseUrl}/crumbIssuer/api/json`, {
+          method: 'GET',
+          headers: { 'Authorization': `Basic ${auth}` },
+        }, (crumbRes) => {
+          let crumbData = '';
+          crumbRes.on('data', d => crumbData += d);
+          crumbRes.on('end', () => {
+            let crumbHeader = {};
+            try {
+              const crumb = JSON.parse(crumbData);
+              crumbHeader[crumb.crumbRequestField] = crumb.crumb;
+            } catch (e) { /* CSRF disabled */ }
 
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Authorization': this._getAuthHeader(),
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: new URLSearchParams(params).toString(),
+            // Now trigger the build
+            const buildReq = http.request(url.href, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Basic ${auth}`,
+                ...crumbHeader,
+              },
+            }, (buildRes) => {
+              if (buildRes.statusCode === 201 || buildRes.statusCode === 200 || buildRes.statusCode === 302) {
+                logger.success(`Jenkins build triggered for job: ${this.jobName}`);
+                resolve({ success: true, message: 'Build triggered successfully' });
+              } else {
+                let body = '';
+                buildRes.on('data', d => body += d);
+                buildRes.on('end', () => {
+                  logger.error(`Jenkins build trigger failed: ${buildRes.statusCode}`);
+                  resolve({ success: false, message: `Build trigger failed: ${buildRes.statusCode}` });
+                });
+              }
+            });
+            buildReq.on('error', (e) => {
+              resolve({ success: false, message: `Cannot connect to Jenkins: ${e.message}` });
+            });
+            buildReq.end();
+          });
+        });
+        crumbReq.on('error', () => {
+          // Try without crumb
+          const buildReq = http.request(url.href, {
+            method: 'POST',
+            headers: { 'Authorization': `Basic ${auth}` },
+          }, (buildRes) => {
+            if (buildRes.statusCode === 201 || buildRes.statusCode === 200 || buildRes.statusCode === 302) {
+              resolve({ success: true, message: 'Build triggered successfully' });
+            } else {
+              resolve({ success: false, message: `Build trigger failed: ${buildRes.statusCode}` });
+            }
+          });
+          buildReq.on('error', (e) => {
+            resolve({ success: false, message: `Cannot connect to Jenkins: ${e.message}` });
+          });
+          buildReq.end();
+        });
+        crumbReq.end();
       });
-
-      if (response.status === 201) {
-        logger.success(`Jenkins build triggered for job: ${this.jobName}`);
-        return { success: true, message: 'Build triggered successfully' };
-      } else {
-        const text = await response.text();
-        logger.error(`Jenkins build trigger failed: ${response.status} ${text}`);
-        return { success: false, message: `Build trigger failed: ${response.status}` };
-      }
     } catch (error) {
       logger.error(`Jenkins connection error: ${error.message}`);
       return {
@@ -57,44 +102,42 @@ class JenkinsService {
    */
   async getLastBuildStatus() {
     try {
-      const fetch = require('node-fetch');
+      const http = require('http');
+      const auth = Buffer.from(`${this.user}:${this.token}`).toString('base64');
       const url = `${this.baseUrl}/job/${this.jobName}/lastBuild/api/json`;
 
-      const response = await fetch(url, {
-        headers: { 'Authorization': this._getAuthHeader() },
+      return new Promise((resolve) => {
+        const req = http.request(url, {
+          headers: { 'Authorization': `Basic ${auth}` },
+        }, (res) => {
+          let body = '';
+          res.on('data', d => body += d);
+          res.on('end', () => {
+            try {
+              const data = JSON.parse(body);
+              resolve({
+                success: true,
+                build: {
+                  number: data.number,
+                  result: data.result,
+                  building: data.building,
+                  duration: data.duration,
+                  timestamp: data.timestamp,
+                  url: data.url,
+                },
+              });
+            } catch (e) {
+              resolve({ success: false, message: 'Could not parse build status' });
+            }
+          });
+        });
+        req.on('error', (e) => {
+          resolve({ success: false, message: `Jenkins not available: ${e.message}` });
+        });
+        req.end();
       });
-
-      if (response.ok) {
-        const data = await response.json();
-        return {
-          success: true,
-          build: {
-            number: data.number,
-            result: data.result,
-            building: data.building,
-            duration: data.duration,
-            timestamp: data.timestamp,
-            url: data.url,
-          },
-        };
-      } else {
-        return { success: false, message: 'Could not fetch build status' };
-      }
     } catch (error) {
-      return {
-        success: false,
-        message: `Jenkins not available: ${error.message}`,
-        // Return simulated data for demo purposes
-        build: {
-          number: 42,
-          result: 'SUCCESS',
-          building: false,
-          duration: 45000,
-          timestamp: Date.now() - 300000,
-          url: `${this.baseUrl}/job/${this.jobName}/42/`,
-          simulated: true,
-        },
-      };
+      return { success: false, message: `Jenkins not available: ${error.message}` };
     }
   }
 
@@ -103,16 +146,30 @@ class JenkinsService {
    */
   async getServerStatus() {
     try {
-      const fetch = require('node-fetch');
-      const response = await fetch(`${this.baseUrl}/api/json`, {
-        headers: { 'Authorization': this._getAuthHeader() },
-        timeout: 5000,
-      });
+      const http = require('http');
+      const auth = Buffer.from(`${this.user}:${this.token}`).toString('base64');
 
-      if (response.ok) {
-        return { connected: true, url: this.baseUrl };
-      }
-      return { connected: false, url: this.baseUrl };
+      return new Promise((resolve) => {
+        const req = http.request(`${this.baseUrl}/api/json`, {
+          headers: { 'Authorization': `Basic ${auth}` },
+          timeout: 5000,
+        }, (res) => {
+          if (res.statusCode === 200) {
+            resolve({ connected: true, url: this.baseUrl });
+          } else {
+            resolve({ connected: false, url: this.baseUrl });
+          }
+          res.resume();
+        });
+        req.on('error', () => {
+          resolve({ connected: false, url: this.baseUrl, message: 'Jenkins server not reachable' });
+        });
+        req.on('timeout', () => {
+          req.destroy();
+          resolve({ connected: false, url: this.baseUrl, message: 'Jenkins timeout' });
+        });
+        req.end();
+      });
     } catch {
       return { connected: false, url: this.baseUrl, message: 'Jenkins server not reachable' };
     }
