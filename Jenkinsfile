@@ -37,8 +37,7 @@ node {
 
             echo 'Copying new code to server...'
             sudo cp -r \${WORKSPACE}/* ${DEPLOY_DIR}/
-            cd ${DEPLOY_DIR}
-            sudo npm install --production
+            sudo bash -c 'cd ${DEPLOY_DIR} && npm install --production'
 
             echo 'Starting service with new version...'
             sudo systemctl start canary-manager
