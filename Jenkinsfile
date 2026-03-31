@@ -4,7 +4,7 @@ pipeline {
     environment {
         NODE_ENV = 'production'
         APP_PORT = '3000'
-        DEPLOY_DIR = '/opt/canary-manager'
+        DEPLOY_DIR = '/home/azureuser/canary-manager'
     }
 
     options {
@@ -16,92 +16,100 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                echo '📦 Checking out source code...'
+                echo '📦 Stage 1: Checking out source code from GitHub...'
                 checkout scm
+                echo "Branch: ${env.GIT_BRANCH}"
+                echo "Commit: ${env.GIT_COMMIT}"
+                sh 'ls -la'
             }
         }
 
         stage('Install Dependencies') {
             steps {
-                echo '📥 Installing Node.js dependencies...'
-                sh 'npm ci --production=false'
+                echo '📥 Stage 2: Installing Node.js dependencies...'
+                sh '''
+                    node --version
+                    npm --version
+                    npm ci --production=false
+                    echo "✅ Dependencies installed successfully"
+                    echo "Total packages:"
+                    ls node_modules | wc -l
+                '''
             }
         }
 
         stage('Run Tests') {
             steps {
-                echo '🧪 Running tests...'
-                sh 'npm test'
+                echo '🧪 Stage 3: Running test suite...'
+                sh '''
+                    npm test 2>&1
+                    echo "✅ All tests passed!"
+                '''
             }
             post {
                 failure {
-                    echo '❌ Tests failed! Aborting deployment.'
+                    echo '❌ Tests failed! Aborting deployment — code quality gate not met.'
                 }
             }
         }
 
-        stage('Build') {
+        stage('Deploy to Server') {
             steps {
-                echo '🔨 Building application...'
-                sh 'echo "Build complete - No build step needed for Node.js"'
-            }
-        }
-
-        stage('Deploy Canary') {
-            steps {
-                echo '🐤 Deploying canary version...'
+                echo '🐤 Stage 4: Deploying canary version to server...'
                 sh '''
-                    # Stop existing service if running
+                    echo "Stopping existing service..."
                     sudo systemctl stop canary-manager || true
+                    sleep 2
 
-                    # Copy files to deployment directory
-                    sudo mkdir -p ${DEPLOY_DIR}
+                    echo "Backing up current version..."
+                    sudo cp -r ${DEPLOY_DIR} ${DEPLOY_DIR}.backup 2>/dev/null || true
+
+                    echo "Deploying new code..."
                     sudo cp -r ./* ${DEPLOY_DIR}/
-
-                    # Install production dependencies
                     cd ${DEPLOY_DIR}
                     sudo npm ci --production
 
-                    # Copy environment file
-                    sudo cp .env.example .env 2>/dev/null || true
-
-                    # Restart service
+                    echo "Starting service..."
                     sudo systemctl start canary-manager
                     sleep 5
+                    echo "✅ Deployment complete"
                 '''
             }
         }
 
         stage('Health Check') {
             steps {
-                echo '🏥 Running health checks...'
+                echo '🏥 Stage 5: Running post-deployment health checks...'
                 sh '''
-                    # Wait for app to start
-                    sleep 10
-
-                    # Check health endpoint
+                    sleep 5
+                    echo "Checking API health endpoint..."
+                    HEALTH_RESPONSE=$(curl -s http://localhost:${APP_PORT}/api/health)
                     HEALTH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:${APP_PORT}/api/health)
 
+                    echo "Response: $HEALTH_RESPONSE"
+                    echo "HTTP Status: $HEALTH_STATUS"
+
                     if [ "$HEALTH_STATUS" = "200" ]; then
-                        echo "✅ Health check passed! Status: $HEALTH_STATUS"
+                        echo "✅ Health check PASSED! Application is healthy."
                     else
-                        echo "❌ Health check failed! Status: $HEALTH_STATUS"
+                        echo "❌ Health check FAILED! Status: $HEALTH_STATUS"
+                        echo "⚠️ Triggering automatic rollback..."
                         exit 1
                     fi
                 '''
             }
             post {
                 failure {
-                    echo '❌ Health check failed! Initiating rollback...'
+                    echo '🔄 Health check failed! Rolling back to previous version...'
                     sh '''
                         sudo systemctl stop canary-manager || true
-                        echo "Rollback: Reverting to previous version"
-                        # Restore from backup if available
                         if [ -d "${DEPLOY_DIR}.backup" ]; then
                             sudo rm -rf ${DEPLOY_DIR}
                             sudo mv ${DEPLOY_DIR}.backup ${DEPLOY_DIR}
                             sudo systemctl start canary-manager
-                            echo "✅ Rollback complete"
+                            echo "✅ Rollback complete — reverted to previous version"
+                        else
+                            echo "⚠️ No backup found — manual intervention required"
                         fi
                     '''
                 }
@@ -109,17 +117,16 @@ pipeline {
         }
 
         stage('Promote to Production') {
-            when {
-                branch 'main'
-            }
             steps {
-                echo '🎉 Promoting canary to production...'
+                echo '🎉 Stage 6: Promoting canary to production...'
                 sh '''
-                    # Backup current version
+                    echo "Cleaning up backup..."
                     sudo rm -rf ${DEPLOY_DIR}.backup
                     sudo cp -r ${DEPLOY_DIR} ${DEPLOY_DIR}.backup
 
-                    echo "✅ Canary promoted to production successfully!"
+                    echo "✅ Canary successfully promoted to production!"
+                    echo "Application URL: http://20.255.60.247"
+                    echo "Jenkins URL: http://20.255.60.247:8080"
                 '''
             }
         }
@@ -127,11 +134,10 @@ pipeline {
 
     post {
         always {
-            echo "Pipeline completed. Build: ${env.BUILD_NUMBER}"
+            echo "Pipeline completed. Build #${env.BUILD_NUMBER}"
         }
         success {
-            echo '✅ Pipeline succeeded!'
-            // Notify the canary manager dashboard
+            echo '✅ CI/CD Pipeline succeeded! Canary is live.'
             sh '''
                 curl -s -X POST http://localhost:${APP_PORT}/api/jenkins/webhook \
                     -H "Content-Type: application/json" \
@@ -139,7 +145,7 @@ pipeline {
             '''
         }
         failure {
-            echo '❌ Pipeline failed!'
+            echo '❌ CI/CD Pipeline failed! Check logs above.'
             sh '''
                 curl -s -X POST http://localhost:${APP_PORT}/api/jenkins/webhook \
                     -H "Content-Type: application/json" \
