@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Canary Release Management & Rollback Monitoring System - Monitor, promote, and rollback canary deployments in real-time">
+  <title>Canary Release Manager | Dashboard</title>
+  <link rel="stylesheet" href="/css/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <div id="connectionBar" class="connection-bar connected">Connected</div>
+  <div id="toastContainer" class="toast-container"></div>
+
+  <div class="app-container">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-left">
+        <div class="header-logo">🐤</div>
+        <div class="header-title">
+          <h1>Canary Release Manager</h1>
+          <p>Real-time deployment monitoring & automated rollback</p>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="live-indicator"><span class="dot"></span> Live Monitoring</div>
+        <button class="btn btn-outline btn-sm" id="triggerJenkins">🔧 Jenkins Build</button>
+      </div>
+    </header>
+
+    <!-- Stats Grid -->
+    <section class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-icon purple">🚀</div>
+        <div class="stat-value" id="totalDeployments">0</div>
+        <div class="stat-label">Total Deployments</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon green">🐤</div>
+        <div class="stat-value" id="activeCanaries">0</div>
+        <div class="stat-label">Active Canaries</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon blue">✅</div>
+        <div class="stat-value" id="promoted">0</div>
+        <div class="stat-label">Promoted</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon red">↩</div>
+        <div class="stat-value" id="rolledBack">0</div>
+        <div class="stat-label">Rolled Back</div>
+      </div>
+    </section>
+
+    <!-- Main Dashboard Grid -->
+    <section class="dashboard-grid">
+      <!-- Left: Create Deployment + Traffic Split -->
+      <div>
+        <!-- Create Deployment -->
+        <div class="glass-card" style="margin-bottom:24px">
+          <div class="card-header">
+            <h2><span class="icon">🚀</span> New Canary Deployment</h2>
+          </div>
+          <form id="createDeploymentForm">
+            <div class="form-row">
+              <div class="form-group">
+                <label for="depName">Deployment Name *</label>
+                <input type="text" class="form-control" id="depName" placeholder="e.g. payment-service" required>
+              </div>
+              <div class="form-group">
+                <label for="depTraffic">Canary Traffic %</label>
+                <input type="number" class="form-control" id="depTraffic" value="10" min="1" max="100">
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="depStableVersion">Stable Version *</label>
+                <input type="text" class="form-control" id="depStableVersion" placeholder="e.g. v1.0.0" required>
+              </div>
+              <div class="form-group">
+                <label for="depCanaryVersion">Canary Version *</label>
+                <input type="text" class="form-control" id="depCanaryVersion" placeholder="e.g. v1.1.0" required>
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="depDescription">Description</label>
+              <input type="text" class="form-control" id="depDescription" placeholder="What's changing in this release?">
+            </div>
+            <button type="submit" class="btn btn-primary" style="width:100%;margin-top:8px">🚀 Deploy Canary</button>
+          </form>
+        </div>
+
+        <!-- Traffic Split -->
+        <div class="glass-card">
+          <div class="card-header">
+            <h2><span class="icon">🔀</span> Traffic Split</h2>
+          </div>
+          <div class="traffic-split">
+            <div class="traffic-donut">
+              <canvas id="trafficDonut"></canvas>
+              <div class="traffic-center">
+                <div class="percent" id="canaryTrafficPercent">10%</div>
+                <div class="label">Canary</div>
+              </div>
+            </div>
+            <div class="traffic-details">
+              <div class="traffic-item">
+                <div class="label-group"><div class="color-dot" style="background:#10b981"></div><span class="name">Stable</span></div>
+                <span class="version" id="stableTrafficPercent">90%</span>
+              </div>
+              <div class="traffic-item">
+                <div class="label-group"><div class="color-dot" style="background:#6366f1"></div><span class="name">Canary</span></div>
+                <span class="version" id="canaryTrafficDisplay">10%</span>
+              </div>
+              <div class="traffic-bar"><div class="traffic-bar-fill" id="trafficBarFill" style="width:10%"></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: Deployments List -->
+      <div class="glass-card">
+        <div class="card-header">
+          <h2><span class="icon">📋</span> Deployments</h2>
+          <span class="status-badge active"><span class="status-dot green"></span>Live</span>
+        </div>
+        <div class="deployment-list" id="deploymentList">
+          <div class="empty-state"><div class="icon">🚀</div><p>No deployments yet</p></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Metrics Charts -->
+    <section class="glass-card" style="margin-bottom:28px">
+      <div class="card-header">
+        <h2><span class="icon">📊</span> Live Metrics</h2>
+        <div class="live-indicator"><span class="dot"></span> Real-time</div>
+      </div>
+      <!-- Live Metric Values -->
+      <div class="stats-grid" style="margin-bottom:20px">
+        <div class="stat-card"><div class="stat-icon red">⚠</div><div class="stat-value" id="liveErrorRate">—</div><div class="stat-label">Canary Error Rate</div></div>
+        <div class="stat-card"><div class="stat-icon blue">⏱</div><div class="stat-value" id="liveLatency">—</div><div class="stat-label">Canary Latency</div></div>
+        <div class="stat-card"><div class="stat-icon purple">💻</div><div class="stat-value" id="liveCpu">—</div><div class="stat-label">Canary CPU</div></div>
+        <div class="stat-card"><div class="stat-icon green">🧠</div><div class="stat-value" id="liveMemory">—</div><div class="stat-label">Canary Memory</div></div>
+      </div>
+      <div class="metrics-grid">
+        <div><h3 style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">Error Rate (%)</h3><div class="chart-container"><canvas id="errorRateChart"></canvas></div></div>
+        <div><h3 style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">Latency (ms)</h3><div class="chart-container"><canvas id="latencyChart"></canvas></div></div>
+        <div><h3 style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">CPU Usage (%)</h3><div class="chart-container"><canvas id="cpuChart"></canvas></div></div>
+        <div><h3 style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">Memory Usage (%)</h3><div class="chart-container"><canvas id="memoryChart"></canvas></div></div>
+      </div>
+    </section>
+
+    <!-- Bottom: Rollback Timeline + Jenkins -->
+    <section class="bottom-grid">
+      <div class="glass-card">
+        <div class="card-header"><h2><span class="icon">↩</span> Rollback History</h2></div>
+        <div class="timeline" id="rollbackTimeline">
+          <div class="empty-state"><div class="icon">✅</div><p>No rollbacks yet</p></div>
+        </div>
+      </div>
+      <div class="glass-card">
+        <div class="card-header"><h2><span class="icon">🔧</span> Jenkins CI/CD</h2></div>
+        <div class="jenkins-status">
+          <div class="indicator disconnected" id="jenkinsIndicator"></div>
+          <div>
+            <div style="font-weight:600;font-size:14px">Jenkins Server</div>
+            <div style="font-size:12px;color:var(--text-muted)" id="jenkinsUrl">http://localhost:8080</div>
+          </div>
+        </div>
+        <button class="btn btn-primary" style="width:100%;margin-bottom:12px" id="triggerJenkinsBuild" onclick="app.triggerJenkinsBuild()">🔨 Trigger Pipeline Build</button>
+        <div class="jenkins-build-info">
+          <div class="info-item"><div class="info-label">Last Build</div><div class="info-value" id="jenkinsBuildNum">#—</div></div>
+          <div class="info-item"><div class="info-label">Status</div><div class="info-value" id="jenkinsBuildStatus">—</div></div>
+          <div class="info-item"><div class="info-label">Duration</div><div class="info-value" id="jenkinsBuildDuration">—</div></div>
+          <div class="info-item"><div class="info-label">Pipeline</div><div class="info-value">canary-pipeline</div></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Rollback Confirmation Modal -->
+  <div class="modal-overlay" id="modalOverlay">
+    <div class="modal">
+      <h3>↩ Confirm Rollback</h3>
+      <p style="color:var(--text-secondary);margin-bottom:16px">This will immediately revert the canary deployment to the stable version.</p>
+      <div class="form-group">
+        <label for="rollbackReason">Rollback Reason</label>
+        <input type="text" class="form-control" id="rollbackReason" placeholder="Why are you rolling back?">
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" id="closeModal">Cancel</button>
+        <button class="btn btn-danger" id="confirmRollback">↩ Rollback Now</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/dashboard.js"></script>
+  <script src="/js/deployments.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>
